@@ -12,6 +12,7 @@
 // see <http://www.gnu.org/licenses/>.
 package net.opentsdb.tsd;
 
+import java.io.IOException;
 import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -314,25 +315,36 @@ public class QueryExecutor {
         // compile all of the expressions
         final long intersect_start = DateTime.currentTimeMillis();
         if (graph != null) {
+          final Integer expressionLength = expressions.size();
           final ExpressionIterator[] compile_stack = 
-              new ExpressionIterator[expressions.size()];
+              new ExpressionIterator[expressionLength];
           final TopologicalOrderIterator<String, DefaultEdge> it = 
               new TopologicalOrderIterator<String, DefaultEdge>(graph);
+          LOG.debug(String.format("Expressions Size is %d", expressionLength));
           int i = 0;
           while (it.hasNext()) {
+            LOG.debug(String.format("Adding expression to compile_stack[%d]", i));
             compile_stack[i++] = expressions.get(it.next());
           }
+          if (i != expressionLength) {
+            throw new IOException(String.format(" Internal Error: Less expressions where added to the compile stack than expressions.size (%d instead of %d)", i, expressionLength));
+          }
+          LOG.debug(String.format("compile stack length: %d", compile_stack.length));
           for (int x = compile_stack.length - 1; x >= 0; x--) {
+            LOG.debug(String.format("this x is: %d", x));
+            if (compile_stack[x] == null) {
+              throw new NullPointerException(String.format("Item %d in compile_stack[] is null", x));
+            }
             // look for and add expressions
             for (final String var : compile_stack[x].getVariableNames()) {
+              LOG.debug("Looking for variable " + var);
               ExpressionIterator source = expressions.get(var);
               if (source != null) {
                 compile_stack[x].addResults(var, source.getCopy());
-                LOG.debug("Adding expression " + source.getId() + " to " + 
-                    compile_stack[x].getId());
+                LOG.debug("Adding expression " + source.getId() + " to " +
+                        compile_stack[x].getId());
               }
             }
-            
             compile_stack[x].compile();
             LOG.debug("Successfully compiled " + compile_stack[x]);
           }
@@ -498,30 +510,22 @@ public class QueryExecutor {
           if (ex != null) {
             LOG.error("Unexpected exception: ", ex);
             // TODO - find a better way to determine the real error
-//            QueryExecutor.this.ts_query.getQueryStats()
-//              .markComplete(HttpResponseStatus.BAD_REQUEST, ex);
             QueryExecutor.this.http_query.badRequest(new BadRequestException(ex));
           } else {
             LOG.error("The deferred group exception didn't have a cause???");
-//            QueryExecutor.this.ts_query.getQueryStats()
-//              .markComplete(HttpResponseStatus.INTERNAL_SERVER_ERROR, ex);
             QueryExecutor.this.http_query.badRequest(new BadRequestException(e));
           }
         } else if (e.getClass() == QueryException.class) {
-//          QueryExecutor.this.ts_query.getQueryStats()
-//            .markComplete(HttpResponseStatus.REQUEST_TIMEOUT, e);
-          QueryExecutor.this.http_query.badRequest(new BadRequestException((QueryException)e));
+          QueryExecutor.this.http_query.badRequest(new BadRequestException((QueryException) e));
+        } else if ((e instanceof IOException) || (e instanceof NullPointerException) || (e instanceof RuntimeException)) {
+          QueryExecutor.this.http_query.internalError(e);
         } else {
-//          QueryExecutor.this.ts_query.getQueryStats()
-//            .markComplete(HttpResponseStatus.INTERNAL_SERVER_ERROR, e);
           QueryExecutor.this.http_query.badRequest(new BadRequestException(e));
         }
         return null;
       } catch (RuntimeException ex) {
         LOG.error("Exception thrown during exception handling", ex);
-//        QueryExecutor.this.ts_query.getQueryStats()
-//          .markComplete(HttpResponseStatus.INTERNAL_SERVER_ERROR, ex);
-        QueryExecutor.this.http_query.sendReply(HttpResponseStatus.INTERNAL_SERVER_ERROR, 
+        QueryExecutor.this.http_query.sendReply(HttpResponseStatus.INTERNAL_SERVER_ERROR,
             ex.getMessage().getBytes());
         return null;
       }
